@@ -10,6 +10,14 @@ from rich.columns import Columns
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 from rich.text import Text
 
@@ -74,20 +82,41 @@ def simulate_batch(
 
 def compute_stats(
     path: Path = DEFAULT_RECORD_PATH,
+    show_progress: bool = True,
 ) -> tuple[Counter[int], Counter[int], int]:
-    """读取记录文件，返回 (红球计数, 蓝球计数, 总注数)。"""
+    """读取记录文件，返回 (红球计数, 蓝球计数, 总注数)。
+
+    show_progress=True 时显示 Rich 进度条，按字节数推进，读完自动消失。
+    """
     red_counter: Counter[int] = Counter()
     blue_counter: Counter[int] = Counter()
     total = 0
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+    file_size = path.stat().st_size
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]读取 {task.fields[name]}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("[dim]{task.completed:>10,} / {task.total:<10,} bytes[/]"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True,
+        disable=not show_progress or file_size == 0,
+    )
+
+    with progress, path.open("rb") as f:
+        task_id = progress.add_task("", total=file_size, name=path.name)
+        for raw in f:
+            progress.advance(task_id, len(raw))
+            stripped = raw.strip()
+            if not stripped:
                 continue
-            record = json.loads(line)
+            record = json.loads(stripped)
             red_counter.update(record["red"])
             blue_counter[record["blue"]] += 1
             total += 1
+
     return red_counter, blue_counter, total
 
 
