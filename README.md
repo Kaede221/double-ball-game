@@ -34,6 +34,9 @@ uv run main.py                # 单次开奖
 | `uv run main.py simulate -o my.jsonl -n 500` | 指定输出文件 |
 | `uv run main.py stats` | 读取 `records.jsonl`，输出红/蓝球频率统计表 |
 | `uv run main.py stats -i my.jsonl` | 指定输入文件 |
+| `uv run main.py play` | 交互式输入选号，开奖并计算中奖金额 |
+| `uv run main.py play --random` | 机选号码后开奖 |
+| `uv run main.py play -r 1 5 12 19 25 31 -b 7` | 直接传号码开奖 |
 
 ### `simulate` 参数
 
@@ -45,6 +48,28 @@ uv run main.py                # 单次开奖
 ### `stats` 参数
 
 - `-i, --input`（默认 `records.jsonl`）：读取的记录文件
+
+读取大文件时会显示一个进度条（按字节数推进，读完自动消失）。
+
+### `play` 参数
+
+- `-r, --red N N N N N N`：6 个红球号码（1-33，不重复）
+- `-b, --blue N`：1 个蓝球号码（1-16）
+- `--random`：机选号码（忽略 `-r` / `-b`）
+- 三种来源都不给时，会交互式提示输入
+
+## 中奖等级（每注投注 2 元）
+
+| 等级 | 命中条件 | 奖金 |
+| --- | --- | --- |
+| 一等奖 | 6 红 + 1 蓝 | 5,000,000 元 |
+| 二等奖 | 6 红 | 200,000 元 |
+| 三等奖 | 5 红 + 1 蓝 | 3,000 元 |
+| 四等奖 | 5 红 / 4 红 + 1 蓝 | 200 元 |
+| 五等奖 | 4 红 / 3 红 + 1 蓝 | 10 元 |
+| 六等奖 | 2 红 + 1 蓝 / 1 红 + 1 蓝 / 0 红 + 1 蓝 | 5 元 |
+
+注：现实中一、二等奖是浮动奖金，本模拟器采用固定值便于演示。
 
 ## 记录文件格式
 
@@ -83,9 +108,10 @@ uv run main.py                # 单次开奖
 `main.py` 里把"业务逻辑"和"展示渲染"做了拆分，方便后续扩展：
 
 - `draw_double_ball()` → 纯逻辑，返回 `(red_balls, blue_ball)`
-- `render_balls()` → 把一注开奖渲染成 Rich `Panel`
+- `validate_picks()` / `judge_prize()` → 纯逻辑，校验号码 / 判奖
+- `render_balls()` / `render_play_result()` / `render_stats()` → 渲染层
 - `simulate_batch()` → 批量开奖 + `Live` 动画 + 写文件
-- `compute_stats()` → 读 JSONL，返回 `Counter`
-- `render_stats()` → 把统计结果渲染成两张并排表格
+- `compute_stats()` → 读 JSONL（带 Rich `Progress` 进度条），返回 `Counter`
+- `prompt_user_picks()` → 交互式输入用户选号
 
 新增功能时，建议保持"算 / 渲染 / IO"分离的写法。

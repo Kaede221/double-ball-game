@@ -25,6 +25,22 @@ console = Console()
 
 DEFAULT_RECORD_PATH = Path("records.jsonl")
 
+BET_COST = 2  # 每注投注金额（元）
+
+# (红球命中数, 蓝球命中数) -> (等级名, 奖金元)
+PRIZE_TABLE: dict[tuple[int, int], tuple[str, int]] = {
+    (6, 1): ("一等奖", 5_000_000),
+    (6, 0): ("二等奖", 200_000),
+    (5, 1): ("三等奖", 3_000),
+    (5, 0): ("四等奖", 200),
+    (4, 1): ("四等奖", 200),
+    (4, 0): ("五等奖", 10),
+    (3, 1): ("五等奖", 10),
+    (2, 1): ("六等奖", 5),
+    (1, 1): ("六等奖", 5),
+    (0, 1): ("六等奖", 5),
+}
+
 
 def draw_double_ball() -> tuple[list[int], int]:
     """模拟一次双色球开奖：6 个红球（1-33，不重复，升序）+ 1 个蓝球（1-16）。"""
@@ -33,23 +49,144 @@ def draw_double_ball() -> tuple[list[int], int]:
     return red_balls, blue_ball
 
 
-def render_balls(red_balls: list[int], blue_ball: int) -> Panel:
-    """把开奖结果渲染成一个漂亮的 Rich Panel。"""
+def _balls_text(
+    red_balls: list[int],
+    blue_ball: int,
+    matched_red: set[int] | None = None,
+    blue_matched: bool = False,
+) -> Text:
+    """把一注球渲染成一行 Text；命中的号码用黄字突出（仍保留红/蓝底色）。"""
+    matched_red = matched_red or set()
     text = Text(no_wrap=True)
     for i, n in enumerate(red_balls):
         if i > 0:
             text.append("  ")
-        text.append(f" {n:02d} ", style="bold white on red")
+        fg = "yellow" if n in matched_red else "white"
+        text.append(f" {n:02d} ", style=f"bold {fg} on red")
     text.append("   +   ", style="bold yellow")
-    text.append(f" {blue_ball:02d} ", style="bold white on blue")
+    blue_fg = "yellow" if blue_matched else "white"
+    text.append(f" {blue_ball:02d} ", style=f"bold {blue_fg} on blue")
+    return text
 
+
+def render_balls(red_balls: list[int], blue_ball: int) -> Panel:
+    """把开奖结果渲染成一个漂亮的 Rich Panel。"""
     return Panel(
-        Align.center(text),
+        Align.center(_balls_text(red_balls, blue_ball)),
         title="[bold gold1]双色球开奖结果[/]",
         subtitle="[dim]红球 1-33 选 6 · 蓝球 1-16 选 1[/]",
         border_style="gold1",
         padding=(1, 2),
     )
+
+
+def validate_picks(red: list[int], blue: int) -> None:
+    """检查用户输入的号码是否合法，不合法抛 ValueError。"""
+    if len(red) != 6:
+        raise ValueError("红球必须是 6 个")
+    if len(set(red)) != 6:
+        raise ValueError("红球不能重复")
+    if any(not 1 <= n <= 33 for n in red):
+        raise ValueError("红球号码必须在 1-33 之间")
+    if not 1 <= blue <= 16:
+        raise ValueError("蓝球号码必须在 1-16 之间")
+
+
+def judge_prize(
+    user_red: list[int],
+    user_blue: int,
+    draw_red: list[int],
+    draw_blue: int,
+) -> tuple[int, int, str, int]:
+    """对一注判奖，返回 (红球命中数, 蓝球命中数, 等级名, 奖金元)。未中奖时等级为 '未中奖'，奖金 0。"""
+    red_matches = len(set(user_red) & set(draw_red))
+    blue_matches = 1 if user_blue == draw_blue else 0
+    tier, amount = PRIZE_TABLE.get((red_matches, blue_matches), ("未中奖", 0))
+    return red_matches, blue_matches, tier, amount
+
+
+def render_play_result(
+    user_red: list[int],
+    user_blue: int,
+    draw_red: list[int],
+    draw_blue: int,
+    red_matches: int,
+    blue_matches: int,
+    tier: str,
+    amount: int,
+) -> Panel:
+    """渲染选号 + 开奖 + 中奖结果。"""
+    matched_red = set(user_red) & set(draw_red)
+    blue_matched = bool(blue_matches)
+
+    label_user = Text(" 您的选号 ", style="bold white on grey35")
+    label_draw = Text(" 开奖结果 ", style="bold white on grey35")
+
+    user_line = Text.assemble(label_user, "  ", _balls_text(sorted(user_red), user_blue))
+    draw_line = Text.assemble(
+        label_draw, "  ", _balls_text(draw_red, draw_blue, matched_red, blue_matched)
+    )
+
+    net = amount - BET_COST
+    if amount == 0:
+        verdict_style = "bold dim"
+        verdict_text = f"未中奖（投注 {BET_COST} 元，净 -{BET_COST} 元）"
+        border = "grey50"
+    elif tier in ("一等奖", "二等奖"):
+        verdict_style = "bold gold1 on grey15"
+        verdict_text = f"🎉 {tier}！奖金 {amount:,} 元（净 {net:+,} 元）"
+        border = "gold1"
+    else:
+        verdict_style = "bold green"
+        verdict_text = f"中奖 · {tier} · 奖金 {amount:,} 元（净 {net:+,} 元）"
+        border = "green"
+
+    summary = Text.assemble(
+        ("命中:  ", "bold"),
+        (f"红球 {red_matches}/6", "bold red"),
+        ("   ·   ", "dim"),
+        (f"蓝球 {blue_matches}/1", "bold blue"),
+    )
+
+    body = Group(
+        Align.center(user_line),
+        Align.center(draw_line),
+        Text(""),
+        Align.center(summary),
+        Text(""),
+        Align.center(Text(verdict_text, style=verdict_style)),
+    )
+
+    return Panel(
+        body,
+        title=f"[bold {border}]双色球对奖[/]",
+        subtitle=f"[dim]每注投注 {BET_COST} 元 · 命中号码用[yellow]黄字[/]显示[/]",
+        border_style=border,
+        padding=(1, 2),
+    )
+
+
+def prompt_user_picks() -> tuple[list[int], int]:
+    """交互式提示用户输入选号，返回 (红球, 蓝球)。"""
+    while True:
+        raw = console.input("[bold red]请输入 6 个红球号码（1-33，空格分隔）：[/] ")
+        try:
+            red = sorted(int(x) for x in raw.split())
+            validate_picks(red, 1)  # 用占位 blue 先校验红球
+            break
+        except ValueError as e:
+            console.print(f"[red]✗ {e}[/]")
+
+    while True:
+        raw = console.input("[bold blue]请输入 1 个蓝球号码（1-16）：[/] ")
+        try:
+            blue = int(raw.strip())
+            validate_picks(red, blue)
+            break
+        except ValueError as e:
+            console.print(f"[red]✗ {e}[/]")
+
+    return red, blue
 
 
 def simulate_batch(
@@ -192,6 +329,15 @@ def main() -> None:
         "-i", "--input", type=Path, default=DEFAULT_RECORD_PATH, help="记录文件路径"
     )
 
+    p_play = sub.add_parser("play", help="选号开奖并计算中奖金额")
+    p_play.add_argument(
+        "-r", "--red", type=int, nargs=6, metavar="N", help="6 个红球号码 (1-33)"
+    )
+    p_play.add_argument(
+        "-b", "--blue", type=int, metavar="N", help="1 个蓝球号码 (1-16)"
+    )
+    p_play.add_argument("--random", action="store_true", help="机选号码")
+
     args = parser.parse_args()
 
     if args.cmd == "simulate":
@@ -202,6 +348,26 @@ def main() -> None:
             return
         red, blue, total = compute_stats(args.input)
         console.print(render_stats(red, blue, total))
+    elif args.cmd == "play":
+        if args.random:
+            user_red, user_blue = draw_double_ball()
+            console.print("[dim]已机选号码[/]")
+        elif args.red is not None and args.blue is not None:
+            user_red, user_blue = sorted(args.red), args.blue
+        else:
+            user_red, user_blue = prompt_user_picks()
+        try:
+            validate_picks(user_red, user_blue)
+        except ValueError as e:
+            console.print(f"[red]✗ {e}[/]")
+            return
+        draw_red, draw_blue = draw_double_ball()
+        red_m, blue_m, tier, amount = judge_prize(user_red, user_blue, draw_red, draw_blue)
+        console.print(
+            render_play_result(
+                user_red, user_blue, draw_red, draw_blue, red_m, blue_m, tier, amount
+            )
+        )
     else:
         red, blue = draw_double_ball()
         console.print(render_balls(red, blue))
